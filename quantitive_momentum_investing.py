@@ -12,13 +12,13 @@ import math
 
 
 def main():
-    # Get CSV File containing tickers
+    # Get and verify CSV File containing tickers
     tickers = pd.read_csv(get_file())
     verify_csv(tickers)
 
-    # Split tickers into list of 100 and create batch query calls for lower-latency responses
-    tickers_split = list(split_list(tickers["Ticker"], 100))
-    tickers_split_strings = []  # split tickers from pd object to strings
+    # Split tickers into list of 1000 and create batch query call
+    tickers_split = list(split_list(tickers["Ticker"], 1000))
+    tickers_split_strings = []  # split tickers from panda objects to strings
     for stock in range(0, len(tickers_split)):
         tickers_split_strings.append(' '.join(tickers_split[stock]))
 
@@ -38,7 +38,7 @@ def main():
 
     dataframe = pd.DataFrame(columns=columns)
 
-    # Create 1yd, 6m, 3m, and 1m datetime objects
+    # Create and format 1yd, 6m, 3m, and 1m datetime objects
     today = date.today()
 
     yesterday = today - relativedelta(days=1)
@@ -52,7 +52,7 @@ def main():
 
     three_months_ago = today - relativedelta(months=3)
     three_months_ago = three_months_ago.strftime("%Y-%m-%d")
-    
+
     one_month_ago = today - relativedelta(months=1)
     one_month_ago = one_month_ago.strftime("%Y-%m-%d")
 
@@ -60,36 +60,37 @@ def main():
              three_months_ago, one_month_ago]
 
     # Calculating price returns
-    for ticker_str in tickers_split_strings[:1]:
-        # Scrape data on batch strings
+    for ticker_str in tickers_split_strings:
+        # Scrape data using batch calls
         data = yf.download(ticker_str, start=one_year_ago,
                            end=today, group_by='ticker')
-
+        
+        # split batch string into single tickers
         for ticker in ticker_str.split(' '):
-            for time_period in dates:  # Gather latest price for each time period
-                latestPrice = round(data[ticker]['Close'][yesterday], 2)
+            for time_period in dates:  # Gather price returns of ticker for each time period
+                latest_price = round(data[ticker]['Close'][yesterday], 2)
 
-                # Price Return = (Today Starting Price / Previous Period Ending Price - 1) * 100
+                # Price Return = (Today Starting Price / Previous Period Ending Price - 1)
                 if time_period == one_year_ago:
                     one_year_price = data[ticker]['Close'][one_year_ago]
-                    one_year_price_return = round((latestPrice / one_year_price - 1), 2)
+                    one_year_price_return = round((latest_price / one_year_price - 1), 2)
 
                 elif time_period == six_months_ago:
                     six_month_price = data[ticker]['Close'][six_months_ago]
-                    six_month_price_return = round((latestPrice / six_month_price - 1), 2)
+                    six_month_price_return = round((latest_price / six_month_price - 1), 2)
 
                 elif time_period == three_months_ago:
                     three_month_price = data[ticker]['Close'][three_months_ago]
-                    three_month_price_return = round((latestPrice / three_month_price - 1), 2)
+                    three_month_price_return = round((latest_price / three_month_price - 1), 2)
                     
                 else:
                     one_month_price = data[ticker]['Close'][one_month_ago]
-                    one_month_price_return = round((latestPrice / one_month_price - 1), 2)
+                    one_month_price_return = round((latest_price / one_month_price - 1), 2)
 
             # append each price return to pandas dataframe
             row = pd.DataFrame([  # new row of data
                 ticker, 
-                latestPrice,
+                latest_price,
                 one_year_price_return,
                 "N/A",
                 six_month_price_return,
@@ -109,16 +110,16 @@ def main():
 
         # Calculate return percentiles
         time_periods = ["One-Year", "Six-Month", "Three-Month", "One-Month"]
-        for i in range(0, len(dataframe.index)):
-            for time_period in time_periods:
+        for i in range(0, len(dataframe.index)):  # for every ticker
+            for time_period in time_periods:  # calculate return percentile at each time period
                 column_to_compare = dataframe[f"{time_period} Price Return"]
                 score_to_calculate = dataframe.loc[i, f"{time_period} Price Return"]
                 dataframe.loc[i, f"{time_period} Return Percentile"] = percentile(column_to_compare, score_to_calculate) / 100
 
         # Calculate High Quality Momentumn (HQM) scores
-        for i in range(0, len(dataframe.index)):
-            percentiles = []  # percentiles of each time period
-            for time_period in time_periods:
+        for i in range(0, len(dataframe.index)):  # for every ticker
+            percentiles = []
+            for time_period in time_periods:  # calculate return percentile at each time period
                 percentiles.append(dataframe.loc[i, f"{time_period} Return Percentile"])
             dataframe.loc[i, "HQM Score"] = mean(percentiles)
 
@@ -152,8 +153,8 @@ def get_file():
             return file_name
 
         else:
-            print(
-                "This file does not exist. Please confirm the file is in this directory and try again.")
+            print("This file does not exist. Please confirm the file is in this directory \
+            and try again.")
 
 
 def verify_csv(tickers):
