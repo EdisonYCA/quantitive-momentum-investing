@@ -1,0 +1,5 @@
+pandas==1.5.2
+python_dateutil==2.8.2
+scipy==1.9.3
+XlsxWriter==3.0.3
+yfinance==0.1.90
