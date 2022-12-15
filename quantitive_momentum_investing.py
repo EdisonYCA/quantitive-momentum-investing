@@ -1,14 +1,20 @@
-# Import dependecies
 from datetime import date
 from dateutil.relativedelta import relativedelta
 import os
 import pandas as pd
 import yfinance as yf
+from scipy.stats import percentileofscore as percentile
+import warnings
+warnings.filterwarnings('ignore', category=RuntimeWarning)
+from statistics import mean
+import xlsxwriter
+import math
 
 
 def main():
     # Get CSV File containing tickers
     tickers = pd.read_csv(get_file())
+    verify_csv(tickers)
 
     # Split tickers into list of 100 and create batch query calls for lower-latency responses
     tickers_split = list(split_list(tickers["Ticker"], 100))
@@ -19,7 +25,6 @@ def main():
     # Create pandas dataframe
     columns = ["Stock",
                "Stock Price",
-               "Number of Shares to Buy",
                "One-Year Price Return",
                "One-Year Return Percentile",
                "Six-Month Price Return",
@@ -28,7 +33,8 @@ def main():
                "Three-Month Return Percentile",
                "One-Month Price Return",
                "One-Month Return Percentile",
-               "HQM Score"]
+               "HQM Score",
+               "Number of Shares to Buy"]
 
     dataframe = pd.DataFrame(columns=columns)
 
@@ -59,53 +65,185 @@ def main():
         data = yf.download(ticker_str, start=one_year_ago,
                            end=today, group_by='ticker')
 
-        # Gather latest price for each time period
         for ticker in ticker_str.split(' '):
-            for time_period in dates:
-                latestPrice = data[ticker]['Open'][yesterday]
-                # Price returns calculations
+            for time_period in dates:  # Gather latest price for each time period
+                latestPrice = round(data[ticker]['Close'][yesterday], 2)
+
+                # Price Return = (Today Starting Price / Previous Period Ending Price - 1) * 100
                 if time_period == one_year_ago:
-                    # Price Return = (Today Starting Price / Previous Period Ending Price - 1) * 100
                     one_year_price = data[ticker]['Close'][one_year_ago]
-                    # one_year_price_return = (latestPrice / one_year_price - 1) * 100
-                    print(f"Ticker: {ticker}, One Year Price: {one_year_price}, Yesterdays Price: {latestPrice}")
+                    one_year_price_return = round((latestPrice / one_year_price - 1), 2)
+
                 elif time_period == six_months_ago:
                     six_month_price = data[ticker]['Close'][six_months_ago]
-                    six_month_price_return = (latestPrice / six_month_price - 1) * 100
-                    # print(f"Ticker: {ticker}, Six Month Price Return: {six_month_price_return}%")
+                    six_month_price_return = round((latestPrice / six_month_price - 1), 2)
+
                 elif time_period == three_months_ago:
                     three_month_price = data[ticker]['Close'][three_months_ago]
-                    # three_month_price_return = (latestPrice / three_months_ago - 1) * 100
-                    print(f"Ticker: {ticker}, Three Month Price: {three_month_price}%")
+                    three_month_price_return = round((latestPrice / three_month_price - 1), 2)
+                    
                 else:
                     one_month_price = data[ticker]['Close'][one_month_ago]
-                    # one_month_price_return = (latestPrice / one_month_ago - 1) * 100
-                    print(f"Ticker: {ticker}, One Month Price: {one_month_price}%")
+                    one_month_price_return = round((latestPrice / one_month_price - 1), 2)
 
-        # Calculate percentiles
-        # Calculate HQM
-        # Select Top 50 Stocks
-        # Ask user to if they want to include EQUAL WIEGHT Option
-        # Format Output
+            # append each price return to pandas dataframe
+            row = pd.DataFrame([  # new row of data
+                ticker, 
+                latestPrice,
+                one_year_price_return,
+                "N/A",
+                six_month_price_return,
+                "N/A",
+                three_month_price_return,
+                "N/A",
+                one_month_price_return,
+                "N/A",
+                "N/A",
+                "N/A"
+            ], index=columns).T
+            dataframe = pd.concat((dataframe, row), ignore_index=True)
+        
+        # fill any price return value that is NaN
+        for return_periods in columns[2:10:2]:
+            dataframe.fillna(dataframe[return_periods], inplace=True)
+
+        # Calculate return percentiles
+        time_periods = ["One-Year", "Six-Month", "Three-Month", "One-Month"]
+        for i in range(0, len(dataframe.index)):
+            for time_period in time_periods:
+                column_to_compare = dataframe[f"{time_period} Price Return"]
+                score_to_calculate = dataframe.loc[i, f"{time_period} Price Return"]
+                dataframe.loc[i, f"{time_period} Return Percentile"] = percentile(column_to_compare, score_to_calculate) / 100
+
+        # Calculate High Quality Momentumn (HQM) scores
+        for i in range(0, len(dataframe.index)):
+            percentiles = []  # percentiles of each time period
+            for time_period in time_periods:
+                percentiles.append(dataframe.loc[i, f"{time_period} Return Percentile"])
+            dataframe.loc[i, "HQM Score"] = mean(percentiles)
+
+        # Select top 50 stocks with respect to HQM score
+        dataframe.sort_values('HQM Score', ascending=False, inplace=True)
+        dataframe = dataframe[:50]
+        dataframe.reset_index(inplace=True, drop=True)
+
+        # Calculate number of shares to buy
+        portfolio_amount = get_portfolio_input()
+        position_size = portfolio_amount / len(dataframe.index)  # amount user should invest in each stock
+
+        for i in range(0, len(dataframe.index)):
+            dataframe.loc[i, 'Number of Shares to Buy'] = math.floor(position_size / dataframe.loc[i, "Stock Price"])   
+
+        # Format output
+        format_excel_output(dataframe)
 
 
 def get_file():
     """Prompt the user for a csv file containing a list of stocks
     and validate the file exists in the current directory"""
     while True:
-        file_name = input("Enter the name of your csv file: ")
+        file_name = input("Enter the name of your csv file (enter '0' to quit): ")
+        if file_name == "0":
+            print("Ending program...")
+            exit()
+
         if os.path.isfile(file_name):
             print("File opened successfully\n")
             return file_name
+
         else:
             print(
                 "This file does not exist. Please confirm the file is in this directory and try again.")
 
 
+def verify_csv(tickers):
+    """Verify that the user enters a csv file contain at-least two tickers"""
+    if len(list(tickers["Ticker"])) < 2:
+        print("CSV file must contain at-least 2 tickers.\nEnding program...")
+        exit()
+    
+
 def split_list(lst, n):
     """Splits a list into sublists of n length"""
     for i in range(0, len(lst), n):
         yield lst[i: i+n]
+
+
+def format_excel_output(dataframe):
+    """saves and formats dataframe into an Excel file"""
+    writer = pd.ExcelWriter('Momentum Strategy.xlsx', engine='xlsxwriter')
+    dataframe.to_excel(writer, 'Momentum Strategy', index=False)
+
+    background_color = '#ffffff'
+    font_color = '#000000'
+
+    string_format = writer.book.add_format(  # format for strings
+        {
+            'font_color': font_color,
+            'bg_color': background_color,
+            'border': 1
+        }
+    )
+
+    dollar_format = writer.book.add_format(  # format for currency
+        {
+            'num_format': '$0.00',
+            'font_color': font_color,
+            'bg_color': background_color,
+            'border': 1
+        }
+    )
+
+    integer_format = writer.book.add_format(  # format for integers
+        {
+            'num_format': '0',
+            'font_color': font_color,
+            'bg_color': background_color,
+            'border': 1
+        }
+    )
+
+    percent_format = writer.book.add_format(  # format for percentages
+        {
+            'num_format': "0.0%",
+            'font_color': font_color,
+            'bg_color': background_color,
+            'border': 1
+        }
+    )
+
+    columns_formats = {  # format for column names
+       'A': ["Stock", string_format],
+       'B': ["Stock Price", dollar_format],
+       'C': ["One-Year Price Return", percent_format],
+       'D': ["One-Year Return Percentile", percent_format],
+       'E': ["Six-Month Price Return", percent_format],
+       'F': ["Six-Month Return Percentile", percent_format],
+       'G': ["Three-Month Price Return", percent_format],
+       'H': ["Three-Month Return Percentile", percent_format],
+       'I': ["One-Month Price Return", percent_format],
+       'J': ["One-Month Return Percentile", percent_format],
+       'K': ["HQM Score", percent_format],
+       'L': ["Number of Shares to Buy", integer_format]
+    }
+
+    for column in columns_formats.keys():
+        writer.sheets['Momentum Strategy'].set_column(f'{column}:{column}', 30, columns_formats[column][1])
+        writer.sheets['Momentum Strategy'].write(f'{column}1', columns_formats[column][0], columns_formats[column][1])
+    writer.close()
+
+    print("Output has been place in: 'Momentum Strategy.xlsx'")
+
+
+def get_portfolio_input():
+    """Get the amount of a users portfolio"""
+    while True:
+        try:
+            portfolio_amount = float(input("Enter the value of your portfolio (enter a '0' to skip this step): "))
+            if type(portfolio_amount) == float:
+                return portfolio_amount
+        except ValueError:
+            print("\nPortfolio amount must be a decimal.")
 
 
 if __name__ == "__main__":
