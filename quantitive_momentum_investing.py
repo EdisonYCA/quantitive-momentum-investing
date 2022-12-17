@@ -153,8 +153,8 @@ def get_file():
             return file_name
 
         else:
-            print("This file does not exist. Please confirm the file is in this directory \
-            and try again.")
+            print("This file does not exist. Please confirm the file is in this directory " +
+            "and try again.")
 
 
 def verify_csv(tickers):
