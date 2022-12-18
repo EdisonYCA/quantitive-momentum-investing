@@ -40,6 +40,9 @@ def main():
 
     # Create and format 1yd, 6m, 3m, and 1m datetime objects
     today = date.today()
+    if today.weekday() == 5 or today.weekday() == 6:
+        # if the date is a weekday make date 1 day or 2 days ago
+        today = today - relativedelta(days=2)
 
     yesterday = today - relativedelta(days=1)
     yesterday = yesterday.strftime("%Y-%m-%d")
